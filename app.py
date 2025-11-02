@@ -211,7 +211,7 @@ def patient_dashboard():
         st.subheader("Add New Patient")
         with st.form("add_patient_form", clear_on_submit=True):
             new_name = st.text_input("Patient Full Name")
-            submitted = st.form_submit_button("➕ Add Patient", type="primary")
+            submitted = st.form_submit_button("➕ Add Patient")
 
             if submitted and new_name:
                 new_id = f"P-{len(st.session_state.patients) + 1001}"
@@ -286,7 +286,8 @@ def clinical_translator(patient_id):
         
         st.info(f"**Files Selected:** {len(uploaded_files)}")
         
-        if uploaded_files and st.button("✨ Synthesize & Standardize Record", type="primary", use_container_width=True):
+        # NOTE: Using type="primary" to make the main action button stand out (now blue)
+        if uploaded_files and st.button("✨ Synthesize & Standardize Record", use_container_width=True):
             with st.spinner(f"Synthesizing data from {len(uploaded_files)} documents..."):
                 try:
                     # Run the Core Function
@@ -332,7 +333,7 @@ def clinical_translator(patient_id):
         COLUMN_NAMES = ['Standard Name', 'Code Type', 'Code Value']
 
         # --- Display Summary ---
-        st.info(f"**Synthesis Date:** {latest_note['date_of_service']} | **Record Summary:** {data.get('quick_summary')}")
+        st.info(f"**Synthesis Date:** {latest_note['date_of_service']} \n **Record Summary:** {data.get('quick_summary')}")
         
         # --- Display Problems (Data Table) ---
         st.markdown("#### Conditions & Problems (SNOMED CT) 📋")
@@ -376,10 +377,6 @@ def main():
         patient_dashboard()
     elif st.session_state.page == 'details':
         clinical_translator(st.session_state.current_patient_id)
-        
-    # Show the few-shot guide in an expander for reference/debugging
-    with st.expander("🛠️ Internal Synthesis Guide (For Reference Only)", expanded=False):
-        st.code(SYSTEM_INSTRUCTION, language='markdown')
 
 
 if __name__ == "__main__":
