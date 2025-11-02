@@ -4,14 +4,15 @@ import json
 import pandas as pd 
 import io
 import datetime
-import time # NEW: For exponential backoff in database calls
+import time 
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from PIL import Image 
 from pydantic import BaseModel, Field
 from typing import List 
-from google.cloud import firestore # NEW: Firestore library import
+from google.cloud import firestore 
+from patient_chatbot import patient_chat_interface # <-- CHANGE 1: Import the new, integrated chat function
 
 # --- 1. PYDANTIC SCHEMA DEFINITION (The Blueprint) ---
 
@@ -324,6 +325,12 @@ def clinical_translator(patient_id):
         
         if not notes:
             st.info("No synthesized records found. Upload notes on the left to create the first record.")
+            
+            # --- CHAT INTEGRATION POINT: No data yet, so show minimal chat ---
+            st.markdown("---")
+            with st.expander("💬 Conversational Assistant (Requires Synthesized Record)", expanded=False):
+                # Pass minimal context if no notes exist
+                patient_chat_interface(patient_id, patient_data['name'], "No synthesized data available yet. Please upload notes first.")
             return
 
         # Show the most recently added note
@@ -368,10 +375,19 @@ def clinical_translator(patient_id):
              with st.expander("View Full Synthesis History"):
                  st.dataframe(pd.DataFrame(notes), use_container_width=True)
 
+    # --- CHAT INTEGRATION POINT: Full context is available here ---
+    st.markdown("---")
+    with st.expander("💬 Conversational Assistant for This Patient", expanded=False):
+        # Pass the latest record JSON as context for the chat model
+        latest_record_json = json.dumps(data, indent=2)
+        patient_chat_interface(patient_id, patient_data['name'], latest_record_json)
+
 
 def main():
     """Main control flow for the Streamlit application."""
     initialize_state()
+    
+    # The navigation now routes only between the Dashboard (list) and Details (translator + chat)
     
     if st.session_state.page == 'dashboard':
         patient_dashboard()
