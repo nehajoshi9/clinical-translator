@@ -32,39 +32,95 @@ def get_client_from_session():
 
 # --- Data Manipulation Helper (CRITICAL FOR UPDATES) ---
 
-def update_record_data(record: Dict[str, Any], action: str, target: str, details: Dict[str, str]) -> Dict[str, Any]:
-    """Applies the AI's requested modification (add/remove) to the patient's record lists."""
-    
-    # 1. Check if the target exists and is a list (problems or medications)
-    if target not in record or not isinstance(record.get(target), list):
-        record[target] = []
-        
-    target_list = record[target]
-    
-    # Ensure 'details' has the required keys for comparison
-    required_keys = ['standard_name', 'standard_code_type', 'standard_code_value']
-    if not all(k in details for k in required_keys):
-        st.error(f"Invalid details for update: Missing required code fields.")
-        return record
+def regenerate_quick_summary(client, record: Dict[str, Any]) -> str:
+    """
+    Uses Gemini to summarize the current patient record into one sentence.
+    """
+    try:
+        prompt = (
+            "Summarize this patient's current clinical record into a single concise sentence. "
+            "Include their major problems and medications.\n\n"
+            f"RECORD:\n{json.dumps(record, indent=2)}"
+        )
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=[prompt]
+        )
+        summary = (response.text or "").strip()
+        if summary:
+            record["quick_summary"] = summary
+            st.toast("🩺 Quick summary regenerated.", icon="✅")
+        else:
+            st.toast("Summary regeneration returned empty text.")
+    except Exception as e:
+        st.toast(f"Failed to regenerate quick summary: {e}")
+    return record
 
-    if action == "add":
-        # Check if the item already exists to prevent duplication
-        if details not in target_list:
-            target_list.append(details)
-            st.toast(f"➕ Added {details.get('standard_name', target)} to {target.capitalize()}.", icon="✅")
+
+def update_record_data(record: Dict[str, Any], action: str, target: str, details: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Applies the AI's requested modification to the patient's record.
+    Supports:
+      - add/remove for list targets (problems, medications)
+      - update for string fields (quick_summary)
+    """
+
+    # --- Handle structured list targets ---
+    if target in ["problems", "medications"]:
+        if target not in record or not isinstance(record.get(target), list):
+            record[target] = []
+        target_list = record[target]
+
+        required_keys = ['standard_name', 'standard_code_type', 'standard_code_value']
+        if not all(k in details for k in required_keys):
+            st.error("Invalid details for update: missing required fields.")
+            return record
+
+        if action == "add":
+            if details not in target_list:
+                target_list.append(details)
+                st.toast(f"Added {details.get('standard_name', target)} to {target}.")
+            else:
+                st.toast(f"{details.get('standard_name', target)} already exists in {target}.")
+        elif action == "remove":
+            initial_length = len(target_list)
+            record[target] = [x for x in target_list if x != details]
+            if len(record[target]) < initial_length:
+                st.toast(f"Removed {details.get('standard_name', target)} from {target}.")
+            else:
+                st.toast(f"Item not found in {target} for removal.")
+        elif action == "update":
+            # Find matching item to replace based on standard_name
+            name = details.get("standard_name")
+            found = False
+            for i, item in enumerate(target_list):
+                if item.get("standard_name") == name:
+                    target_list[i] = details
+                    found = True
+                    st.toast(f"Updated {name} in {target}.")
+                    break
+            if not found:
+                st.toast(f"Could not find {name} to update in {target}.")
+
+    # --- Handle simple text fields like quick_summary ---
+    elif target == "quick_summary" and action == "update":
+        if isinstance(details, dict):
+            # Allow either { "quick_summary": "..." } or { "text": "..." }
+            new_summary = details.get("quick_summary") or details.get("text")
+        elif isinstance(details, str):
+            new_summary = details
         else:
-             st.toast(f"❌ Item {details.get('standard_name', target)} already exists.", icon="❌")
-             
-    elif action == "remove":
-        initial_length = len(target_list)
-        # Filter out the item to be removed based on exact match of details
-        record[target] = [item for item in target_list if item != details]
-        
-        if len(record[target]) < initial_length:
-            st.toast(f"🗑️ Removed {details.get('standard_name', target)} from {target.capitalize()}.", icon="✅")
+            new_summary = None
+
+        if new_summary:
+            record["quick_summary"] = new_summary
+            st.toast("Updated quick summary.")
         else:
-            st.toast(f"❌ Item not found in {target} for removal.", icon="❌")
-            
+            st.toast("Invalid quick_summary update format.")
+
+    else:
+        st.toast(f"Unsupported action or target: {action} → {target}")
+
     return record
 
 
@@ -195,18 +251,37 @@ def patient_chat_interface(patient_id, patient_name, record_context):
                         # Validate the core action/target
                         if act in ["add", "remove"] and tgt in ["problems", "medications"]:
                             
-                            # --- 2. APPLY UPDATE TO SESSION STATE ---
-                            latest_record = record_json
-                            updated_record = update_record_data(latest_record, act, tgt, det)
-                            
-                            # --- 3. PERSIST CHANGES ---
-                            st.session_state.patients[patient_id]['notes'][-1]['raw_data'] = updated_record
-                            
-                            if save_patient_data(patient_id, st.session_state.patients[patient_id]):
-                                # Rerun to update the tables and height instantly
-                                st.rerun() 
+                            # --- 2. APPLY UPDATE TO ACTUAL PATIENT RECORD ---
+                            patient_data = st.session_state.patients.get(patient_id)
+                            if not patient_data or not patient_data.get("notes"):
+                                st.error("No record found to update.")
                             else:
-                                st.warning("Update applied but failed to save to database.")
+                                latest_note = patient_data["notes"][-1]
+                                live_record = latest_note["raw_data"]
+
+                                # Apply update in place
+                                # Apply the update first
+                                updated_record = update_record_data(live_record, act, tgt, det)
+
+                                # --- Re-generate the quick summary automatically if data changed ---
+                                updated_record = regenerate_quick_summary(client, updated_record)
+
+                                # Write back to the latest note
+                                latest_note["raw_data"] = updated_record
+
+                                # Reflect back into session state
+                                st.session_state.patients[patient_id] = patient_data
+
+                                # Persist to Firestore (sync save)
+                                if save_patient_data(patient_id, patient_data):
+                                    st.toast("Record updated successfully.")
+                                else:
+                                    st.warning("Local update applied but Firestore save failed.")
+
+                                # --- Trigger soft rerun to refresh right column tables ---
+                                st.session_state["_trigger_refresh"] = True
+                                st.rerun()
+
                         
                     except Exception:
                         st.toast("AI generated invalid JSON. Please rephrase the request.", icon="⚠️")

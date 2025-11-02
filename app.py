@@ -107,6 +107,13 @@ def translate_clinical_note_multi(uploaded_files, schema):
 # 5. FIRESTORE HELPERS
 # -------------------------------
 
+def clinical_translator(pid):
+    # Auto-refresh triggered by chat updates
+    if st.session_state.get("_trigger_refresh"):
+        st.session_state["_trigger_refresh"] = False
+        st.experimental_rerun()
+
+
 @st.cache_data(show_spinner=False)
 def load_patients_from_firestore():
     if not db:
