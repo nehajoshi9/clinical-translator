@@ -128,7 +128,7 @@ def update_record_data(record: Dict[str, Any], action: str, target: str, details
 
 def get_system_instruction(patient_name, record_context):
     return (
-        "You are a Clinical Data Assistant. You can answer questions or modify the patient's record. You can also recommend additions, removals, or updates to their problems and medications based on best clinical practices. "
+        "You are a Clinical Data Assistant. You can answer questions or modify the patient's record. You can also recommend additions, removals, or updates to their problems and medications based on best clinical practices, including dosage information. "
         f"The patient’s name is {patient_name}. When modifying data, return a JSON block with "
         "`action`, `target`, and `details` keys. Example: "
         '{"action": "add", "target": "medications", "details": {"standard_name": "Lisinopril", '

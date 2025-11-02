@@ -57,12 +57,17 @@ if not GEMINI_API_KEY:
 # as defined in the provided app.py snippet.
 @st.cache_resource
 def get_firestore_client():
+    """Initialize Firestore client with robust error handling."""
     try:
-        path = os.getenv("GCP_SERVICE_ACCOUNT_FILE")
-        if path and os.path.exists(path):
-            return firestore.Client.from_service_account_json(path)
-        return firestore.Client()
-    except Exception:
+        sa_path = os.getenv("GCP_SERVICE_ACCOUNT_FILE")
+        if sa_path and os.path.exists(sa_path):
+            client = firestore.Client.from_service_account_json(sa_path)
+        else:
+            client = firestore.Client()
+        # Test connection
+        _ = client.collections()
+        return client
+    except Exception as e:
         return None
 
 @st.cache_resource
@@ -115,21 +120,34 @@ def clinical_translator(pid):
 
 
 @st.cache_data(show_spinner=False)
+
 def load_patients_from_firestore():
-    if not db:
+    """Load all patients from Firestore."""
+    client = get_firestore_client()
+    if not client:
+        st.warning("Firestore unavailable — running in local-only mode.")
         return {}
     try:
-        return {doc.id: doc.to_dict() for doc in db.collection("patients").stream()}
-    except Exception:
+        docs = client.collection("patients").stream()
+        patients = {doc.id: doc.to_dict() for doc in docs}
+        return patients
+    except Exception as e:
+        st.error(f"❌ Failed to load Firestore data: {e}")
         return {}
 
+
 def save_patient_data(pid, data):
-    if not db:
+    """Save or update a patient record in Firestore."""
+    client = get_firestore_client()
+    if not client:
+        st.warning("Firestore unavailable — not saving remotely.")
         return False
     try:
-        db.collection("patients").document(pid).set(data)
+        client.collection("patients").document(pid).set(data)
+        st.toast(f"✅ Saved {pid} to Firestore", icon="💾")
         return True
-    except Exception:
+    except Exception as e:
+        st.error(f"❌ Firestore save failed: {e}")
         return False
 
 # -------------------------------
@@ -228,7 +246,7 @@ def clinical_translator(pid):
             key=f"upload_{pid}"
         )
 
-        if uploaded_files and st.button("Synthesize & Save", type='primary', width='stretch'):
+        if uploaded_files and st.button("Synthesize & Save", width='stretch'):
             with st.spinner("Synthesizing..."):
                 try:
                     result = translate_clinical_note_multi(uploaded_files, TargetSchema)
