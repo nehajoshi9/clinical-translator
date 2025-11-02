@@ -1,21 +1,24 @@
 import streamlit as st
 import os
 import json
+import pandas as pd 
+import io
+import datetime
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from pydantic import BaseModel, Field
-from typing import List
-from PIL import Image
-import io
-import pandas as pd 
-import datetime # NEW: for timestamping patient records
 
-# --- 1. PYDANTIC SCHEMA DEFINITION ---
+# 🚨 CRITICAL FIX: Ensure PIL is imported and the Image class is available
+from PIL import Image 
+from pydantic import BaseModel, Field
+from typing import List 
+# ... rest of your code ...
+
+# --- 1. PYDANTIC SCHEMA DEFINITION (The Blueprint) ---
 
 class ClinicalTerm(BaseModel):
     """Represents a single clinical entity extracted and standardized."""
-    # Removed 'source_text' for cleaner, standardized output
+    # Source text removed successfully!
     standard_name: str = Field(..., description="The standardized, human-readable name of the entity (e.g., 'Hypertension', 'Lisinopril').")
     standard_code_type: str = Field(..., description="The type of code used (e.g., 'SNOMED_CT' for problems, 'RxNorm' for drugs).")
     standard_code_value: str = Field(..., description="The official, standardized code value.")
@@ -23,7 +26,6 @@ class ClinicalTerm(BaseModel):
 
 class ClinicalTranslation(BaseModel):
     """The final, structured output for the patient record, synthesized from all documents."""
-    
     patient_id: str = Field(..., description="A unique identifier for the patient (e.g., P-4321).")
     date_of_service: str = Field(..., description="The date of the most recent note, in YYYY-MM-DD format.")
     quick_summary: str = Field(..., description="A single sentence summarizing the patient's main clinical problems and current status, synthesized from ALL documents.")
@@ -36,11 +38,16 @@ TargetSchema = ClinicalTranslation
 
 # --- 2. CONFIGURATION & SETUP ---
 
-load_dotenv() 
-st.set_page_config(layout="wide", page_title="Clinical Data Synthesizer")
+# Use Dark Blue accent color (Option 2 fix for the button color)
+st.set_page_config(
+    page_title="Clinical Data Synthesizer", 
+    layout="wide",
+    initial_sidebar_state="expanded" # Keep only the valid, basic parameters
+)
 
+load_dotenv() 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
-MODEL = "gemini-2.5-flash" # Stable and fast model for multimodal tasks
+MODEL = "gemini-2.5-flash"
 
 if not GEMINI_API_KEY:
     st.error("FATAL ERROR: GEMINI_API_KEY not found. Please create a .env file and add your key.")
@@ -93,7 +100,7 @@ def translate_clinical_note_multi(uploaded_files, schema):
     return response.text
 
 
-# --- 5. STREAMLIT PAGES AND NAVIGATION ---
+# --- 5. STREAMLIT APPLICATION PAGES ---
 
 def initialize_state():
     """Initializes session state variables for navigation and data storage."""
@@ -103,7 +110,8 @@ def initialize_state():
         st.session_state.page = 'dashboard'
     if 'current_patient_id' not in st.session_state:
         st.session_state.current_patient_id = None
-    # Ensure a few demo patients exist on first run
+        
+    # Ensure a few demo patients exist on first run for better demo visibility
     if len(st.session_state.patients) == 0:
         st.session_state.patients['P-1001'] = {'name': 'Jane Doe', 'date_added': '2025-10-01', 'notes': []}
         st.session_state.patients['P-1002'] = {'name': 'John Smith', 'date_added': '2025-10-15', 'notes': []}
@@ -124,12 +132,11 @@ def patient_dashboard():
             submitted = st.form_submit_button("➕ Add Patient", type="primary")
 
             if submitted and new_name:
-                # Simple ID generation
                 new_id = f"P-{len(st.session_state.patients) + 1001}"
                 st.session_state.patients[new_id] = {
                     'name': new_name,
                     'date_added': datetime.date.today().strftime("%Y-%m-%d"),
-                    'notes': [] # List to hold processed note data
+                    'notes': [] 
                 }
                 st.success(f"Patient {new_name} added with ID: {new_id}")
 
@@ -140,18 +147,14 @@ def patient_dashboard():
         if not st.session_state.patients:
             st.info("No patients found. Add one on the left to get started!")
         else:
-            # Display patient cards, sorted by name
             sorted_patients = dict(sorted(st.session_state.patients.items(), key=lambda item: item[1]['name']))
             
             for p_id, p_data in sorted_patients.items():
-                
-                # Card structure
                 card = st.container(border=True)
                 card_cols = card.columns([3, 1])
 
                 card_cols[0].markdown(f"**{p_data['name']}** <br> <small>ID: `{p_id}` | Notes: **{len(p_data['notes'])}**</small>", unsafe_allow_html=True)
 
-                # Navigation button
                 if card_cols[1].button("View Notes →", key=f"view_{p_id}", use_container_width=True):
                     st.session_state.current_patient_id = p_id
                     st.session_state.page = 'details'
@@ -180,21 +183,25 @@ def clinical_translator(patient_id):
 
     col1, col2 = st.columns([1, 1])
 
-    # --- Document Upload & Processing (Existing Logic) ---
+    # --- Document Upload & Processing (Multi-File Logic) ---
     with col1:
-        st.subheader("1. Upload Clinical Document")
-        uploaded_file = st.file_uploader(
-            "Upload Handwritten Patient Note (PNG, JPEG, or PDF)", 
+        st.subheader("1. Upload Clinical Documents")
+        
+        # --- Multi-File Uploader ---
+        uploaded_files = st.file_uploader(
+            "Upload ALL notes for this patient to generate a UNIFIED record.", 
             type=["png", "jpg", "jpeg", "pdf"],
+            accept_multiple_files=True,
             key=f"uploader_{patient_id}"
         )
         
-        if uploaded_file:
-            st.image(uploaded_file, caption='Document Ready for Translation', use_container_width=True)
-
-        if st.button("✨ Translate & Standardize Note", type="primary", use_container_width=True, disabled=not uploaded_file):
-            with st.spinner("1. Performing Handwriting OCR. 2. Mapping to SNOMED/RxNorm. 3. Generating DataFrames..."):
+        st.info(f"**Files Selected:** {len(uploaded_files)}")
+        
+        # NOTE: Using type="primary" to make the main action button stand out (now blue)
+        if uploaded_files and st.button("✨ Synthesize & Standardize Record", type="primary", use_container_width=True):
+            with st.spinner(f"Synthesizing data from {len(uploaded_files)} documents..."):
                 try:
+                    # Run the Core Function
                     json_output_text = translate_clinical_note_multi(uploaded_files, TargetSchema)
                     data = json.loads(json_output_text)
 
@@ -202,67 +209,69 @@ def clinical_translator(patient_id):
                     new_note = {
                         'date_of_service': data.get('date_of_service', datetime.date.today().strftime("%Y-%m-%d")),
                         'summary': data.get('quick_summary', 'N/A'),
-                        'raw_data': data # Store the full dictionary
+                        'raw_data': data 
                     }
+                    # Always append the newest full synthesis to the list of notes
                     st.session_state.patients[patient_id]['notes'].append(new_note)
 
-                    st.success(f"✅ Note processed and saved for {patient_data['name']}!")
+                    st.success(f"✅ Record Synthesized and Saved for {patient_data['name']}!")
                     # Rerun to update the history below
                     st.rerun() 
 
                 except Exception as e:
-                    with col2:
-                        st.error(f"An error occurred during translation: {e}")
-                        st.warning("Please check the input image and verify your API key.")
+                    st.error(f"An error occurred during synthesis: {e}")
+                    st.warning("Please check the input files and ensure your API key is functional.")
 
     # --- Processed Note History & Display ---
     with col2:
-        st.subheader("2. Note History & Latest Translation")
+        st.subheader("2. Unified Record & Detail")
         
         notes = st.session_state.patients[patient_id]['notes']
         
         if not notes:
-            st.info("No clinical notes have been processed for this patient yet.")
+            st.info("No synthesized records found. Upload notes on the left to create the first record.")
             return
 
         # Show the most recently added note
         latest_note = notes[-1]
         data = latest_note['raw_data']
+        COLUMN_NAMES = ['Standard Name', 'Code Type', 'Code Value']
 
-        st.success("Latest Note Translation:")
-        
         # --- Display Summary ---
-        st.info(f"**Date of Service:** {data.get('date_of_service')}")
-        st.write(f"**Summary:** {data.get('quick_summary')}")
+        st.info(f"**Synthesis Date:** {latest_note['date_of_service']} | **Record Summary:** {data.get('quick_summary')}")
         
         # --- Display Problems (Data Table) ---
-        st.markdown("##### Conditions & Problems (SNOMED CT) 📋")
-        if data.get('problems'):
+        st.markdown("#### Conditions & Problems (SNOMED CT) 📋")
+        
+        try:
             df_problems = pd.DataFrame(data['problems'])
-            df_problems.columns = ['Source Term', 'Standard Name', 'Code Type', 'Code Value']
-            st.dataframe(df_problems, use_container_width=True, hide_index=True)
-        else:
-            st.markdown("*No problems identified.*")
+            df_problems.columns = COLUMN_NAMES
+        except ValueError:
+            # Handles Length Mismatch error if list is empty
+            df_problems = pd.DataFrame(columns=COLUMN_NAMES)
+        
+        st.dataframe(df_problems, use_container_width=True, hide_index=True)
 
         # --- Display Medications (Data Table) ---
-        st.markdown("##### Medications (RxNorm) 💊")
-        if data.get('medications'):
+        st.markdown("#### Medications (RxNorm) 💊")
+        
+        try:
             df_meds = pd.DataFrame(data['medications'])
-            df_meds.columns = ['Source Term', 'Standard Name', 'Code Type', 'Code Value']
-            st.dataframe(df_meds, use_container_width=True, hide_index=True)
-        else:
-            st.markdown("*No medications identified.*")
-
+            df_meds.columns = COLUMN_NAMES
+        except ValueError:
+            # Handles Length Mismatch error if list is empty
+            df_meds = pd.DataFrame(columns=COLUMN_NAMES)
+            
+        st.dataframe(df_meds, use_container_width=True, hide_index=True)
+        
         # Display Raw JSON for export/debugging
-        with st.expander(f"View Raw JSON for Note ({latest_note['date_of_service']})"):
+        with st.expander("View Raw JSON Output"):
             st.code(json.dumps(data, indent=2), language='json')
             
-        # Optional: Add an expander to see the list of all processed notes
+        # Optional: Add an expander to see the list of all processed records
         if len(notes) > 1:
-             with st.expander("View Full Note History"):
-                 # Simple list of past notes
-                 for i, note in enumerate(notes[:-1]):
-                     st.markdown(f"- **Note {i+1}**: {note['date_of_service']} - {note['summary']}")
+             with st.expander("View Full Synthesis History"):
+                 st.dataframe(pd.DataFrame(notes), use_container_width=True)
 
 
 def main():
@@ -275,8 +284,8 @@ def main():
         clinical_translator(st.session_state.current_patient_id)
         
     # Show the few-shot guide in an expander for reference/debugging
-    with st.expander("🛠️ Internal Few-Shot Guide (For Reference Only)", expanded=False):
-        st.code(FEW_SHOT_GUIDE, language='markdown')
+    with st.expander("🛠️ Internal Synthesis Guide (For Reference Only)", expanded=False):
+        st.code(SYSTEM_INSTRUCTION, language='markdown')
 
 
 if __name__ == "__main__":
