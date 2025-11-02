@@ -4,21 +4,20 @@ import json
 import pandas as pd 
 import io
 import datetime
+import time # NEW: For exponential backoff in database calls
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-
-# 🚨 CRITICAL FIX: Ensure PIL is imported and the Image class is available
 from PIL import Image 
 from pydantic import BaseModel, Field
 from typing import List 
-# ... rest of your code ...
+from google.cloud import firestore # NEW: Firestore library import
 
 # --- 1. PYDANTIC SCHEMA DEFINITION (The Blueprint) ---
 
 class ClinicalTerm(BaseModel):
     """Represents a single clinical entity extracted and standardized."""
-    # Source text removed successfully!
+    # Note: 'source_text' removed from schema
     standard_name: str = Field(..., description="The standardized, human-readable name of the entity (e.g., 'Hypertension', 'Lisinopril').")
     standard_code_type: str = Field(..., description="The type of code used (e.g., 'SNOMED_CT' for problems, 'RxNorm' for drugs).")
     standard_code_value: str = Field(..., description="The official, standardized code value.")
@@ -38,11 +37,10 @@ TargetSchema = ClinicalTranslation
 
 # --- 2. CONFIGURATION & SETUP ---
 
-# Use Dark Blue accent color (Option 2 fix for the button color)
 st.set_page_config(
     page_title="Clinical Data Synthesizer", 
     layout="wide",
-    initial_sidebar_state="expanded" # Keep only the valid, basic parameters
+    initial_sidebar_state="expanded"
 )
 
 load_dotenv() 
@@ -54,6 +52,27 @@ if not GEMINI_API_KEY:
     st.stop()
     
 client = genai.Client(api_key=GEMINI_API_KEY)
+
+
+# --- FIRESTORE INITIALIZATION ---
+# Robustly initialize Firestore client using Service Account or Default Credentials
+try:
+    # Look for an environment variable pointing to the Service Account JSON file path
+    service_account_path = os.getenv("GCP_SERVICE_ACCOUNT_FILE")
+    
+    if service_account_path and os.path.exists(service_account_path):
+        # Authenticate using a specific service account file (Best Practice for deployment)
+        db = firestore.Client.from_service_account_json(service_account_path)
+        FIRESTORE_STATUS = "Ready (Service Account)"
+    else:
+        # Authenticate using Application Default Credentials (ADC) or environment credentials
+        db = firestore.Client()
+        FIRESTORE_STATUS = "Ready (Default Credentials)"
+
+except Exception as e:
+    # Fallback status if initialization fails (e.g., missing credentials)
+    db = None
+    FIRESTORE_STATUS = f"Error: Firestore needs credentials. Details: {e}"
 
 
 # --- 3. PROMPT DEFINITION ---
@@ -100,28 +119,91 @@ def translate_clinical_note_multi(uploaded_files, schema):
     return response.text
 
 
-# --- 5. STREAMLIT APPLICATION PAGES ---
+# --- 5. FIRESTORE PERSISTENCE FUNCTIONS ---
+
+@st.cache_data(show_spinner=False)
+def load_patients_from_firestore(max_retries=5):
+    """Loads all patient data from the Firestore 'patients' collection."""
+    # Check status to prevent errors if db is None
+    if db is None:
+        return {}
+    
+    for attempt in range(max_retries):
+        try:
+            patients = {}
+            # Retrieve all documents from the 'patients' collection
+            patient_ref = db.collection("patients").stream()
+            for doc in patient_ref:
+                patients[doc.id] = doc.to_dict()
+            return patients
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                time.sleep(wait_time) # Exponential backoff
+            else:
+                st.error(f"Failed to load data from Firestore after {max_retries} attempts: {e}")
+                return {} # Return empty dictionary on failure
+    return {}
+
+def save_patient_data(patient_id, patient_data, max_retries=5):
+    """Saves or updates a single patient's data in Firestore."""
+    # Check status to prevent errors if db is None
+    if db is None:
+        st.error("Cannot save data: Firestore client is not initialized.")
+        return False
+
+    for attempt in range(max_retries):
+        try:
+            # Set the data for the specific patient document
+            db.collection("patients").document(patient_id).set(patient_data)
+            return True
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                time.sleep(wait_time) # Exponential backoff
+            else:
+                st.error(f"Failed to save data to Firestore after {max_retries} attempts: {e}")
+                return False # Return failure status
+    return False
+
+
+# --- 6. STREAMLIT APPLICATION PAGES ---
 
 def initialize_state():
     """Initializes session state variables for navigation and data storage."""
+    # Load persistent data from Firestore on first run
     if 'patients' not in st.session_state:
-        st.session_state.patients = {} # {id: {name: str, date_added: str, notes: list}}
+        # Use st.cache_data function to load data once
+        st.session_state.patients = load_patients_from_firestore()
+        
     if 'page' not in st.session_state:
         st.session_state.page = 'dashboard'
     if 'current_patient_id' not in st.session_state:
         st.session_state.current_patient_id = None
         
-    # Ensure a few demo patients exist on first run for better demo visibility
-    if len(st.session_state.patients) == 0:
-        st.session_state.patients['P-1001'] = {'name': 'Jane Doe', 'date_added': '2025-10-01', 'notes': []}
-        st.session_state.patients['P-1002'] = {'name': 'John Smith', 'date_added': '2025-10-15', 'notes': []}
+    # If no data loaded and connection is ready, initialize with a couple of demos
+    if not st.session_state.patients and FIRESTORE_STATUS.startswith("Ready"):
+        demo_patient_1 = {'name': 'Jane Doe', 'date_added': '2025-10-01', 'notes': []}
+        demo_patient_2 = {'name': 'John Smith', 'date_added': '2025-10-15', 'notes': []}
+        
+        # Save demo patients to both session state and database
+        st.session_state.patients['P-1001'] = demo_patient_1
+        st.session_state.patients['P-1002'] = demo_patient_2
+        save_patient_data('P-1001', demo_patient_1)
+        save_patient_data('P-1002', demo_patient_2)
 
 
 def patient_dashboard():
     """The 'Home Screen' showing the list of patients and the add form."""
     st.title("🏥 Patient Notes Dashboard")
     st.markdown("---")
-
+    
+    # NEW: Display Firestore connection status
+    if FIRESTORE_STATUS.startswith("Ready"):
+         st.success(f"✅ **Real Backend:** Connected to Firestore using: {FIRESTORE_STATUS.split('(')[1].replace(')', '')}")
+    else:
+         st.warning(f"⚠️ **Backend Status:** Firestore connection error. Data will not persist. Details: {FIRESTORE_STATUS}")
+    
     col1, col2 = st.columns([1, 2])
 
     # --- Add New Patient Form ---
@@ -133,12 +215,19 @@ def patient_dashboard():
 
             if submitted and new_name:
                 new_id = f"P-{len(st.session_state.patients) + 1001}"
-                st.session_state.patients[new_id] = {
+                new_patient_data = {
                     'name': new_name,
                     'date_added': datetime.date.today().strftime("%Y-%m-%d"),
                     'notes': [] 
                 }
-                st.success(f"Patient {new_name} added with ID: {new_id}")
+                
+                # Save to Firestore
+                if save_patient_data(new_id, new_patient_data):
+                    st.session_state.patients[new_id] = new_patient_data
+                    st.success(f"Patient {new_name} added and saved to database with ID: {new_id}")
+                else:
+                    st.error("Could not save patient to database. Try again.")
+
 
     # --- Patient List ---
     with col2:
@@ -197,7 +286,6 @@ def clinical_translator(patient_id):
         
         st.info(f"**Files Selected:** {len(uploaded_files)}")
         
-        # NOTE: Using type="primary" to make the main action button stand out (now blue)
         if uploaded_files and st.button("✨ Synthesize & Standardize Record", type="primary", use_container_width=True):
             with st.spinner(f"Synthesizing data from {len(uploaded_files)} documents..."):
                 try:
@@ -214,7 +302,12 @@ def clinical_translator(patient_id):
                     # Always append the newest full synthesis to the list of notes
                     st.session_state.patients[patient_id]['notes'].append(new_note)
 
-                    st.success(f"✅ Record Synthesized and Saved for {patient_data['name']}!")
+                    # Save updated patient data to Firestore
+                    if save_patient_data(patient_id, st.session_state.patients[patient_id]):
+                        st.success(f"✅ Record Synthesized and Saved to database for {patient_data['name']}!")
+                    else:
+                        st.warning("Record synthesized but failed to save to database.")
+                    
                     # Rerun to update the history below
                     st.rerun() 
 
@@ -235,6 +328,7 @@ def clinical_translator(patient_id):
         # Show the most recently added note
         latest_note = notes[-1]
         data = latest_note['raw_data']
+        # COLUMN_NAMES updated to reflect the removal of 'source_text' from the schema
         COLUMN_NAMES = ['Standard Name', 'Code Type', 'Code Value']
 
         # --- Display Summary ---
