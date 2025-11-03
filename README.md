@@ -1,18 +1,19 @@
-# 🧠 Gemini Clinical Synthesizer
+# Gemini Clinical Synthesizer
 
 An AI-powered Streamlit app that automatically **extracts, standardizes, and maintains clinical patient records** using Google’s **Gemini 2.5 Flash** model.  
 It synthesizes uploaded medical notes into structured JSON, displays them as interactive data tables, and enables a **conversational assistant** to query or update patient records intelligently — all backed by **Firebase Firestore**.
 
 ---
 
-## 🚀 Inspiration
+## Inspiration
 
-Healthcare data is scattered across formats — handwritten notes, scanned PDFs, EMRs, and reports — making it difficult for clinicians to access unified, structured insights.  
+Healthcare data is scattered across formats — handwritten notes, scanned PDFs, EMRs, and reports — making it difficult for clinicians to access unified, structured insights.
 We wanted to explore how **LLMs can bridge the gap between unstructured notes and actionable data**, and how conversational AI could streamline reviewing and updating patient histories.
+To do so, we learned about SNOMED and RxNorm codes and how they are used across the healthcare industry. Thus, the handwritten notes are being converted into these standardized codes. 
 
 ---
 
-## 💡 What it does
+## What it does
 
 - Upload any clinical document (PNG, JPG, or PDF)  
 - Gemini performs **OCR + clinical entity extraction**, producing a structured JSON summary  
@@ -25,7 +26,7 @@ We wanted to explore how **LLMs can bridge the gap between unstructured notes an
 
 ---
 
-## 🛠️ How we built it
+## How we built it
 
 - **Frontend:** Streamlit (Python)
 - **AI Model:** Google Gemini 2.5 Flash via `google-genai` SDK  
@@ -36,7 +37,7 @@ We wanted to explore how **LLMs can bridge the gap between unstructured notes an
 
 ---
 
-## ⚙️ Setup
+## Setup
 
 1. Clone this repo  
    ```bash
@@ -54,5 +55,5 @@ GCP_SERVICE_ACCOUNT_FILE=path/to/serviceAccount.json
 
 
 5. Run the app
-
+```bash
 streamlit run app.py
